@@ -2,5 +2,10 @@
 
 members = [
   "lifetime",
-  "boxref"
+  "boxref",
+  "rc",
+  "cell",
+  "thread",
+  "future",
+  "my-redis"
 ]
