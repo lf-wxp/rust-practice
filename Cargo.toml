@@ -7,5 +7,7 @@ members = [
   "cell",
   "thread",
   "future",
-  "my-redis"
+  "my-redis",
+  "future-time",
+  "future-pin"
 ]
