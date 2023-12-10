@@ -8,6 +8,7 @@ use std::{
 
 use futures::{Future, FutureExt};
 use pin_project::pin_project;
+use pin_utils::pin_mut;
 use tokio::{
   fs::File,
   io::{AsyncRead, AsyncReadExt, ReadBuf},
@@ -31,6 +32,9 @@ impl Future for MyFuture {
 
   fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
     println!("MyFuture::poll()");
+    let mut sp = sleep(Duration::from_secs(1));
+    pin_mut!(sp);
+    let _ = sp.as_mut().poll(cx);
     self.sleep.as_mut().poll(cx)
   }
 }

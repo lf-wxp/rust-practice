@@ -9,5 +9,6 @@ members = [
   "future",
   "my-redis",
   "future-time",
-  "future-pin"
+  "future-pin",
+  "pin-mark"
 ]
