@@ -1,0 +1,5 @@
+{
+  "rust-analyzer.linkedProjects": [
+    "./future-stream/Cargo.toml"
+  ]
+}
