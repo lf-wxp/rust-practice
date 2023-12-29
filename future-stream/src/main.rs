@@ -1,44 +1,32 @@
 use std::{
-  cell::RefCell,
-  ops::Range,
   pin::Pin,
-  rc::Rc,
-  task::{Poll, Waker}, sync::{Mutex, Arc}, borrow::BorrowMut,
+  sync::{Arc, Mutex},
+  task::{Context, Poll, Waker},
+  time::Duration,
 };
 
-use futures::{channel::mpsc, ready, task::SpawnExt, Sink, SinkExt, Stream, StreamExt};
-use tokio::spawn;
+use futures::{channel::mpsc, Sink, SinkExt, Stream, StreamExt};
+use tokio::{spawn, time::sleep};
 
-pub type Error = Box<dyn std::error::Error>;
+pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
 struct Pipe {
-  value: Range<i32>,
-  waker:Arc<Mutex<Option<Waker>>>,
+  waker: Arc<Mutex<Option<Waker>>>,
   message_receiver: mpsc::UnboundedReceiver<i32>,
   message_sender: mpsc::UnboundedSender<i32>,
-  is_ready: bool,
+  ready: Arc<Mutex<bool>>,
+  flushed: Arc<Mutex<bool>>,
 }
 
 impl Pipe {
   fn new() -> Pipe {
-    let value = 0..100;
     let (sender, receiver) = mpsc::unbounded();
     Pipe {
-      value,
       waker: Arc::new(Mutex::new(None)),
       message_receiver: receiver,
       message_sender: sender,
-      is_ready: false,
-    }
-  }
-  fn set_ready(&mut self, val: bool) {
-    self.is_ready = val;
-  }
-
-  fn setup(&self) {
-    let mut waker = self.waker.lock().unwrap();
-    if let Some(waker) = waker.take() {
-      waker.wake();
+      ready: Arc::new(Mutex::new(false)),
+      flushed: Arc::new(Mutex::new(false)),
     }
   }
 }
@@ -46,65 +34,101 @@ impl Pipe {
 impl Sink<i32> for Pipe {
   type Error = Error;
 
-  fn poll_ready(
-    self: Pin<&mut Self>,
-    cx: &mut std::task::Context<'_>,
-  ) -> std::task::Poll<Result<(), Self::Error>> {
-    if self.is_ready {
+  fn start_send(self: Pin<&mut Self>, item: i32) -> Result<(), Self::Error> {
+    let this = self.get_mut();
+    println!("start_send");
+    this
+      .message_sender
+      .unbounded_send(item)
+      .map_err(|e| Box::new(e) as Error)
+  }
+
+  fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    let this = self.get_mut();
+    let ready = this.ready.lock().unwrap();
+    println!("poll_ready {}", *ready);
+    if *ready {
       Poll::Ready(Ok(()))
     } else {
-      let mut waker = self.waker.lock().unwrap();
+      let mut waker = this.waker.lock().unwrap();
       *waker = Some(cx.waker().clone());
       Poll::Pending
     }
   }
 
-  fn start_send(mut self: Pin<&mut Self>, item: i32) -> Result<(), Self::Error> {
-    println!("start_send");
-    let _ = self.message_sender.send(item);
-    Ok(())
+  fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    let this = self.get_mut();
+    let flushed = this.flushed.lock().unwrap();
+    println!("poll_flush {}", *flushed);
+    if *flushed {
+      Poll::Ready(Ok(()))
+    } else {
+      let mut waker = this.waker.lock().unwrap();
+      *waker = Some(cx.waker().clone());
+      Poll::Pending
+    }
   }
 
-  fn poll_flush(
-    self: Pin<&mut Self>,
-    _cx: &mut std::task::Context<'_>,
-  ) -> std::task::Poll<Result<(), Self::Error>> {
-    println!("poll_flush");
-    Poll::Ready(Ok(()))
-  }
-
-  fn poll_close(
-    self: Pin<&mut Self>,
-    _cx: &mut std::task::Context<'_>,
-  ) -> std::task::Poll<Result<(), Self::Error>> {
-    println!("poll_close");
+  fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
     Poll::Ready(Ok(()))
   }
 }
 
 impl Stream for Pipe {
-  type Item = i32;
+  type Item = Result<i32, Error>;
 
-  fn poll_next(
-    mut self: Pin<&mut Self>,
-    cx: &mut std::task::Context<'_>,
-  ) -> Poll<Option<Self::Item>> {
-    let msg = ready!(self.message_receiver.poll_next_unpin(cx));
-    Poll::Ready(msg)
+  fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    let this = self.get_mut();
+    println!("poll_next");
+    match Pin::new(&mut this.message_receiver).poll_next(cx) {
+      Poll::Ready(Some(v)) => Poll::Ready(Some(Ok(v))),
+      Poll::Ready(None) => Poll::Ready(None),
+      Poll::Pending => {
+        let mut waker = this.waker.lock().unwrap();
+        *waker = Some(cx.waker().clone());
+        Poll::Pending
+      }
+    }
   }
 }
 
 #[tokio::main]
 async fn main() {
-  let mut pipe = Pipe::new();
-  pipe.setup();
-  pipe.set_ready(true);
+  let pipe = Pipe::new();
+  let waker = pipe.waker.clone();
+  let waker_clone = pipe.waker.clone();
+  let ready = pipe.ready.clone();
+  let flushed = pipe.flushed.clone();
   let (mut write, mut read) = pipe.split();
-  let manager = spawn(async move {
+  let read_handle = spawn(async move {
+    println!("read");
     while let Some(val) = read.next().await {
-      println!("read value is {}", val);
+      println!("read value is {}", val.unwrap());
     }
   });
+  let write_handle = spawn(async move {
+    println!("write");
+    let _ = write.send(22).await;
+  });
+  let ready_handle = spawn(async move {
+    sleep(Duration::from_secs(2)).await;
+    println!("ready");
+    *ready.lock().unwrap() = true;
+    if let Some(waker) = waker.lock().unwrap().as_ref() {
+      waker.wake_by_ref();
+    }
+  });
+  let flushed_handle = spawn(async move {
+    sleep(Duration::from_secs(5)).await;
+    println!("flush");
+    *flushed.lock().unwrap() = true;
+    if let Some(waker) = waker_clone.lock().unwrap().as_ref() {
+      waker.wake_by_ref();
+    }
+  });
+  write_handle.await.unwrap();
+  read_handle.await.unwrap();
+  // ready_handle.await.unwrap();
+  // flushed_handle.await.unwrap();
   println!("Hello, world!");
-  let _ = manager.await;
 }
