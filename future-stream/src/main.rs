@@ -5,7 +5,7 @@ use std::{
   time::Duration,
 };
 
-use futures::{channel::mpsc, Sink, SinkExt, Stream, StreamExt};
+use futures::{channel::mpsc, ready, Sink, SinkExt, Stream, StreamExt};
 use tokio::{spawn, time::sleep};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -75,21 +75,21 @@ impl Sink<i32> for Pipe {
 }
 
 impl Stream for Pipe {
-  type Item = Result<i32, Error>;
+  type Item = i32;
 
   fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
     let this = self.get_mut();
-    println!("poll_next");
-    match Pin::new(&mut this.message_receiver).poll_next(cx) {
-      Poll::Ready(Some(v)) => Poll::Ready(Some(Ok(v))),
-      Poll::Ready(None) => Poll::Ready(None),
-      Poll::Pending => {
-        let mut waker = this.waker.lock().unwrap();
-        *waker = Some(cx.waker().clone());
-        Poll::Pending
-      }
-    }
+    println!("poll_next before");
+    let msg = ready!(this.message_receiver.poll_next_unpin(cx));
+    println!("poll_next  after {:?}", &msg);
+    Poll::Ready(msg)
   }
+}
+
+async fn sleep_print(time: u64) {
+  println!("sleep_print before {:}", time);
+  sleep(Duration::from_secs(time)).await;
+  println!("sleep_print after {:}", time);
 }
 
 #[tokio::main]
@@ -103,12 +103,13 @@ async fn main() {
   let read_handle = spawn(async move {
     println!("read");
     while let Some(val) = read.next().await {
-      println!("read value is {}", val.unwrap());
+      println!("read value is {}", val);
     }
   });
   let write_handle = spawn(async move {
-    println!("write");
+    println!("write before");
     let _ = write.send(22).await;
+    println!("write after");
   });
   let ready_handle = spawn(async move {
     sleep(Duration::from_secs(2)).await;
@@ -126,9 +127,9 @@ async fn main() {
       waker.wake_by_ref();
     }
   });
-  write_handle.await.unwrap();
+  let time_handle = spawn(async move {
+    tokio::join!(sleep_print(6), sleep_print(2),);
+  });
   read_handle.await.unwrap();
-  // ready_handle.await.unwrap();
-  // flushed_handle.await.unwrap();
   println!("Hello, world!");
 }
