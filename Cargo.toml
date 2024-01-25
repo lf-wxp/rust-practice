@@ -11,5 +11,6 @@ members = [
   "future-time",
   "future-pin",
   "future-stream",
-  "pin-mark"
+  "pin-mark",
+  "future-channel",
 ]
