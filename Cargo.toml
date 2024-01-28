@@ -13,4 +13,5 @@ members = [
   "future-stream",
   "pin-mark",
   "future-channel",
+  "yew-await",
 ]
