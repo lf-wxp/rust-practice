@@ -4,7 +4,7 @@ use std::{
 };
 
 use futures::{ready, Future, StreamExt};
-use postage::broadcast::Receiver;
+use async_broadcast::Receiver;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
