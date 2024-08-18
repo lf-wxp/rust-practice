@@ -1,14 +1,16 @@
 use yew::prelude::*;
 
-use crate::link::Link;
+use crate::test::Test;
 
 mod link;
+mod test;
 mod request;
+mod global;
 
 #[function_component]
 fn App() -> Html {
   html! {
-    <Link />
+    <Test />
   }
 }
 

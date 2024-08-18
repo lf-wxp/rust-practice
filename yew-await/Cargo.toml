@@ -6,7 +6,7 @@ version = "0.1.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-broadcast = "0.7.0"
+async-broadcast = {git = "https://github.com/smol-rs/async-broadcast"}
 futures = "0.3.30"
 gloo-console = "0.3.0"
 gloo-net = "0.5.0"

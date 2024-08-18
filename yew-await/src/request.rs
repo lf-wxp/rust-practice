@@ -3,8 +3,9 @@ use std::{
   task::{Context, Poll},
 };
 
-use futures::{ready, Future, StreamExt};
 use async_broadcast::Receiver;
+use futures::{ready, Future, StreamExt};
+use gloo_console::log;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -34,19 +35,21 @@ impl Future for RequestMedia {
   fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
     let this = self.get_mut();
     let msg = ready!(this.receiver.poll_next_unpin(cx));
+    log!("poll xxx ", format!("{:?}", &msg));
     if let Some(msg) = msg {
       match serde_json::from_str::<ResponseMessage>(&msg) {
         Ok(msg) => {
-          println!("poll xxx {:?}", &msg);
           if let ResponseMessage::Media(message) = msg {
-            println!("poll  after {:?}", &message);
             return Poll::Ready(message);
           }
-          return Poll::Pending;
+          log!("not media msg");
         }
         Err(_) => return Poll::Pending,
       }
     }
+    // 如果未解析到有效的Media消息，唤醒当前任务以便在下一次事件循环时继续尝试接收消息。
+    cx.waker().wake_by_ref();
+    log!("before pending");
     Poll::Pending
   }
 }
