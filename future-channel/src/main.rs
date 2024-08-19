@@ -1,58 +1,15 @@
 use std::{
   pin::Pin,
   task::{Context, Poll},
+  time::Duration,
 };
 
-use futures::{ready, Future, FutureExt};
-use serde::{Deserialize, Serialize};
-use tokio::{spawn, sync::broadcast::{self, Receiver, Sender} };
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Media {
-  pub text: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Log {
-  pub text: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub enum Data {
-  Media(Media),
-  Log(Log),
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct ResponseMessage {
-  id: String,
-  data: Data,
-}
-
-pub struct Request {
-  sender: Sender<String>,
-  receiver: Receiver<String>,
-}
-
-impl Request {
-  pub fn new(sender: Sender<String>, receiver: Receiver<String>) -> Self {
-    Request { receiver, sender }
-  }
-
-  pub fn request(&mut self, data: Data, id: String) -> RequestFuture {
-    println!("id {:?}", id.clone());
-    let message = serde_json::to_string(&ResponseMessage {
-      data,
-      id: id.clone(),
-    })
-    .unwrap();
-    let sender = self.sender.clone();
-    let receiver = self.sender.subscribe();
-    let future = RequestFuture::new(id, receiver);
-    let _ = sender.send(message);
-    future
-  }
-}
+use async_broadcast::{broadcast, Receiver};
+use futures::{ready, Future, StreamExt};
+use tokio::{
+  spawn,
+  time::sleep,
+};
 
 pub struct RequestFuture {
   id: String,
@@ -66,71 +23,50 @@ impl RequestFuture {
 }
 
 impl Future for RequestFuture {
-  type Output = Data;
+  type Output = String;
 
   fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
     let this = self.get_mut();
     println!("poll before {}", &this.id);
-    let msg = ready!(Box::pin(this.receiver.recv()).poll_unpin(cx));
-    if let Ok(msg) = msg {
-      match serde_json::from_str::<ResponseMessage>(&msg) {
-        Ok(ResponseMessage { data, id }) => {
-          println!("poll xxx {:?}, {:?}, {:?}", &this.id, &id, &msg);
-          if id == this.id {
-            println!("poll  after {:?}", &msg);
-            return Poll::Ready(data);
-          }
-          println!("poll pending xxx {:?}, {:?}, {:?}", &this.id, &id, &msg);
-          return Poll::Pending;
-        }
-        Err(_) => return Poll::Pending,
+    let msg = ready!(this.receiver.poll_next_unpin(cx));
+    // let msg = ready!(Box::pin(this.receiver.recv()).poll_unpin(cx));
+    println!("poll after {}", &this.id);
+    if let Some(msg) = msg {
+      if msg.contains(&this.id) {
+        return Poll::Ready(msg);
       }
     }
-    return Poll::Pending;
+    cx.waker().wake_by_ref();
+    Poll::Pending
   }
 }
 
 #[tokio::main]
 async fn main() {
-  let (sender, receiver) = broadcast::channel::<String>(10);
+  let (sender, receiver) = broadcast::<String>(10);
+  let sender_clone = sender.clone();
 
-  let mut other = sender.subscribe();
-  let other_receive = spawn(async move {
+  spawn(async move {
+    sleep(Duration::from_secs(3)).await;
+    let _ = sender_clone.broadcast_direct("message 1".to_string()).await;
+    println!("send");
+    sleep(Duration::from_secs(3)).await;
+    let _ = sender_clone.broadcast_direct("message 2".to_string()).await;
+  });
+
+  let mut other = receiver.clone();
+  spawn(async move {
     while let Ok(msg) = other.recv().await {
       println!("receive msg {:}", msg);
     }
   });
-  let receiver_clone = sender.subscribe();
-  let sender_clone = sender.clone();
-  let await_handle1 = spawn(async move {
-    println!("await start1");
-    let mut request = Request::new(sender_clone, receiver_clone);
-    let msg = request
-      .request(
-        Data::Media(Media {
-          text: "media".to_string(),
-        }),
-        "1".to_string(),
-      )
-      .await;
-    println!("await msg1 {:?}", &msg);
-  });
 
-  let receiver_clone = sender.subscribe();
-  let sender_clone = sender.clone();
-  let await_handle2 = spawn(async move {
-    println!("await start2");
-    let mut request = Request::new(sender_clone, receiver_clone);
-    let msg = request
-      .request(
-        Data::Log(Log {
-          text: "log".to_string(),
-        }),
-        "2".to_string(),
-      )
-      .await;
-    println!("await msg2, {:?} ", &msg);
-  });
+  let receiver = receiver.clone();
+  let request_future = RequestFuture {
+    id: "1".to_string(),
+    receiver,
+  };
 
-  await_handle2.await.unwrap();
+  let result = request_future.await;
+  println!("result: {}", result);
 }

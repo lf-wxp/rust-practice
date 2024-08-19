@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-broadcast = "0.7.1"
+async-broadcast = {git = "https://github.com/smol-rs/async-broadcast"}
 futures = "0.3.30"
 serde = { version = "1.0.196", features = ["derive"] }
 serde_json = "1.0.113"
